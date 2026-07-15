@@ -15,6 +15,7 @@ import os
 import time
 
 from app.core.redis_client import redis_client
+from .config import settings
 from .api.v1 import (
     users_lightning,
     cities,
@@ -92,10 +93,13 @@ async def lifespan(app: FastAPI):
 
     # Initialize Supabase connection pool
     try:
-        from .core.supabase_connection_pool import supabase_pool
+        if settings.supabase_url and settings.supabase_service_role_key:
+            from .core.supabase_connection_pool import supabase_pool
 
-        await supabase_pool.initialize()
-        logger.info("✅ Supabase connection pool initialized")
+            await supabase_pool.initialize()
+            logger.info("✅ Supabase connection pool initialized")
+        else:
+            logger.info("ℹ️ Supabase credentials not configured - using local PostgreSQL paths for local development")
     except Exception as e:
         logger.error(f"❌ Supabase connection pool initialization failed: {e}")
         # Continue startup - fallback to direct connections
