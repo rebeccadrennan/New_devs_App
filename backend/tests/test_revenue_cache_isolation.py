@@ -76,13 +76,15 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _stub_calculate_total_revenue(property_id: str, tenant_id: str):
+def _stub_calculate_monthly_revenue(property_id: str, tenant_id: str, month: int, year: int):
     return {
         "property_id": property_id,
         "tenant_id": tenant_id,
         "total": f"{tenant_id}-total",
         "currency": "USD",
         "count": 1,
+        "month": month,
+        "year": year,
     }
 
 
@@ -90,36 +92,36 @@ def test_tenants_do_not_share_cache_for_same_property(monkeypatch):
     fake_redis = FakeRedis()
     monkeypatch.setattr(revenue_cache, "redis_client", fake_redis)
 
-    async def fake_calc(property_id, tenant_id):
-        return _stub_calculate_total_revenue(property_id, tenant_id)
+    async def fake_calc(property_id, tenant_id, month, year):
+        return _stub_calculate_monthly_revenue(property_id, tenant_id, month, year)
 
     from app.services import reservations
 
-    monkeypatch.setattr(reservations, "calculate_total_revenue", fake_calc)
+    monkeypatch.setattr(reservations, "calculate_monthly_revenue", fake_calc)
 
-    tenant_a = _run(revenue_cache.get_revenue_summary("prop-002", "tenant-a"))
-    tenant_b = _run(revenue_cache.get_revenue_summary("prop-002", "tenant-b"))
+    tenant_a = _run(revenue_cache.get_revenue_summary("prop-002", "tenant-a", month=3, year=2024))
+    tenant_b = _run(revenue_cache.get_revenue_summary("prop-002", "tenant-b", month=3, year=2024))
 
     assert tenant_a["tenant_id"] == "tenant-a"
     assert tenant_b["tenant_id"] == "tenant-b"
     assert tenant_a != tenant_b
-    assert "revenue:tenant-a:prop-002" in fake_redis.store
-    assert "revenue:tenant-b:prop-002" in fake_redis.store
+    assert "revenue:v2:tenant-a:prop-002:2024-03" in fake_redis.store
+    assert "revenue:v2:tenant-b:prop-002:2024-03" in fake_redis.store
 
 
 def test_request_order_does_not_change_tenant_result(monkeypatch):
     fake_redis = FakeRedis()
     monkeypatch.setattr(revenue_cache, "redis_client", fake_redis)
 
-    async def fake_calc(property_id, tenant_id):
-        return _stub_calculate_total_revenue(property_id, tenant_id)
+    async def fake_calc(property_id, tenant_id, month, year):
+        return _stub_calculate_monthly_revenue(property_id, tenant_id, month, year)
 
     from app.services import reservations
 
-    monkeypatch.setattr(reservations, "calculate_total_revenue", fake_calc)
+    monkeypatch.setattr(reservations, "calculate_monthly_revenue", fake_calc)
 
-    first_b = _run(revenue_cache.get_revenue_summary("prop-003", "tenant-b"))
-    then_a = _run(revenue_cache.get_revenue_summary("prop-003", "tenant-a"))
+    first_b = _run(revenue_cache.get_revenue_summary("prop-003", "tenant-b", month=3, year=2024))
+    then_a = _run(revenue_cache.get_revenue_summary("prop-003", "tenant-a", month=3, year=2024))
 
     assert first_b["tenant_id"] == "tenant-b"
     assert then_a["tenant_id"] == "tenant-a"
@@ -129,22 +131,22 @@ def test_tenant_b_cache_hit_cannot_return_tenant_a_data(monkeypatch):
     fake_redis = FakeRedis()
     monkeypatch.setattr(revenue_cache, "redis_client", fake_redis)
 
-    async def fake_calc(property_id, tenant_id):
-        return _stub_calculate_total_revenue(property_id, tenant_id)
+    async def fake_calc(property_id, tenant_id, month, year):
+        return _stub_calculate_monthly_revenue(property_id, tenant_id, month, year)
 
     from app.services import reservations
 
-    monkeypatch.setattr(reservations, "calculate_total_revenue", fake_calc)
+    monkeypatch.setattr(reservations, "calculate_monthly_revenue", fake_calc)
 
-    _run(revenue_cache.get_revenue_summary("prop-001", "tenant-a"))
-    _run(revenue_cache.get_revenue_summary("prop-001", "tenant-b"))
+    _run(revenue_cache.get_revenue_summary("prop-001", "tenant-a", month=3, year=2024))
+    _run(revenue_cache.get_revenue_summary("prop-001", "tenant-b", month=3, year=2024))
 
-    async def fail_if_called(property_id, tenant_id):
-        raise AssertionError("calculate_total_revenue should not be called on cache hit")
+    async def fail_if_called(property_id, tenant_id, month, year):
+        raise AssertionError("calculate_monthly_revenue should not be called on cache hit")
 
-    monkeypatch.setattr(reservations, "calculate_total_revenue", fail_if_called)
+    monkeypatch.setattr(reservations, "calculate_monthly_revenue", fail_if_called)
 
-    tenant_b_hit = _run(revenue_cache.get_revenue_summary("prop-001", "tenant-b"))
+    tenant_b_hit = _run(revenue_cache.get_revenue_summary("prop-001", "tenant-b", month=3, year=2024))
     assert tenant_b_hit["tenant_id"] == "tenant-b"
 
 
@@ -154,25 +156,25 @@ def test_tenant_specific_invalidation_only_removes_that_tenant_key(monkeypatch):
 
     calls = {"count": 0}
 
-    async def fake_calc(property_id, tenant_id):
+    async def fake_calc(property_id, tenant_id, month, year):
         calls["count"] += 1
-        return _stub_calculate_total_revenue(property_id, tenant_id)
+        return _stub_calculate_monthly_revenue(property_id, tenant_id, month, year)
 
     from app.services import reservations
 
-    monkeypatch.setattr(reservations, "calculate_total_revenue", fake_calc)
+    monkeypatch.setattr(reservations, "calculate_monthly_revenue", fake_calc)
 
-    _run(revenue_cache.get_revenue_summary("prop-004", "tenant-a"))
-    _run(revenue_cache.get_revenue_summary("prop-004", "tenant-b"))
+    _run(revenue_cache.get_revenue_summary("prop-004", "tenant-a", month=3, year=2024))
+    _run(revenue_cache.get_revenue_summary("prop-004", "tenant-b", month=3, year=2024))
 
-    deleted = _run(revenue_cache.invalidate_revenue_summary_cache("prop-004", "tenant-a"))
+    deleted = _run(revenue_cache.invalidate_revenue_summary_cache("prop-004", "tenant-a", month=3, year=2024))
     assert deleted is True
-    assert "revenue:tenant-a:prop-004" not in fake_redis.store
-    assert "revenue:tenant-b:prop-004" in fake_redis.store
+    assert "revenue:v2:tenant-a:prop-004:2024-03" not in fake_redis.store
+    assert "revenue:v2:tenant-b:prop-004:2024-03" in fake_redis.store
 
     # tenant-a should recalculate, tenant-b should stay cached
-    _run(revenue_cache.get_revenue_summary("prop-004", "tenant-a"))
-    _run(revenue_cache.get_revenue_summary("prop-004", "tenant-b"))
+    _run(revenue_cache.get_revenue_summary("prop-004", "tenant-a", month=3, year=2024))
+    _run(revenue_cache.get_revenue_summary("prop-004", "tenant-b", month=3, year=2024))
 
     # 2 initial misses + 1 miss after tenant-a invalidation
     assert calls["count"] == 3
@@ -192,16 +194,39 @@ def test_authenticated_tenant_cannot_fetch_other_tenant_cached_result(monkeypatc
     fake_redis = FakeRedis()
     monkeypatch.setattr(revenue_cache, "redis_client", fake_redis)
 
-    async def fake_calc(property_id, tenant_id):
-        return _stub_calculate_total_revenue(property_id, tenant_id)
+    async def fake_calc(property_id, tenant_id, month, year):
+        return _stub_calculate_monthly_revenue(property_id, tenant_id, month, year)
 
     from app.services import reservations
 
-    monkeypatch.setattr(reservations, "calculate_total_revenue", fake_calc)
+    monkeypatch.setattr(reservations, "calculate_monthly_revenue", fake_calc)
 
     # First authenticated tenant populates cache for shared property_id.
-    _run(revenue_cache.get_revenue_summary("prop-002", "tenant-a"))
+    _run(revenue_cache.get_revenue_summary("prop-002", "tenant-a", month=3, year=2024))
 
     # Another authenticated tenant must resolve to its own tenant-scoped cache entry.
-    tenant_b = _run(revenue_cache.get_revenue_summary("prop-002", "tenant-b"))
+    tenant_b = _run(revenue_cache.get_revenue_summary("prop-002", "tenant-b", month=3, year=2024))
     assert tenant_b["tenant_id"] == "tenant-b"
+
+
+def test_legacy_cache_key_is_ignored_for_monthly_results(monkeypatch):
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(revenue_cache, "redis_client", fake_redis)
+
+    # Simulate stale value from the old pre-fix cache key format.
+    fake_redis.store["revenue:tenant-a:prop-001"] = '{"tenant_id":"tenant-a","total":"1.00"}'
+
+    calls = {"count": 0}
+
+    async def fake_calc(property_id, tenant_id, month, year):
+        calls["count"] += 1
+        return _stub_calculate_monthly_revenue(property_id, tenant_id, month, year)
+
+    from app.services import reservations
+
+    monkeypatch.setattr(reservations, "calculate_monthly_revenue", fake_calc)
+
+    result = _run(revenue_cache.get_revenue_summary("prop-001", "tenant-a", month=3, year=2024))
+    assert result["tenant_id"] == "tenant-a"
+    assert calls["count"] == 1
+    assert "revenue:v2:tenant-a:prop-001:2024-03" in fake_redis.store
